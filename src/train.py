@@ -55,7 +55,12 @@ def estimate_loss():
     return out
 
 
+os.makedirs("logs", exist_ok=True)
+os.makedirs("checkpoints", exist_ok=True)
+ckpt_path = f"checkpoints/{args.name}.pt"
+
 history = []
+best_val, best_step = float("inf"), 0
 start_time = time.time()
 for step in range(args.max_steps + 1):
     if step % args.eval_interval == 0:
@@ -64,6 +69,10 @@ for step in range(args.max_steps + 1):
         history.append({"step": step, "train": losses["train"], "val": losses["val"],
                         "seconds": round(elapsed, 1)})
         print(f"step {step}: train {losses['train']:.4f}, val {losses['val']:.4f}, {elapsed:.0f}s")
+        if losses["val"] < best_val:   # keep the best model, not just the last one
+            best_val, best_step = losses["val"], step
+            torch.save({"model": model.state_dict(), "config": cfg.__dict__}, ckpt_path)
+            print(f"  saved best model (val {best_val:.4f})")
 
     x, y = batch("train")
     _, loss = model(x, y)
@@ -71,16 +80,17 @@ for step in range(args.max_steps + 1):
     loss.backward()
     optimizer.step()
 
-os.makedirs("logs", exist_ok=True)
-os.makedirs("checkpoints", exist_ok=True)
 with open(f"logs/{args.name}.json", "w") as f:
-    json.dump({"config": vars(args), "parameters": n_params, "history": history}, f)
-torch.save({"model": model.state_dict(), "config": cfg.__dict__}, f"checkpoints/{args.name}.pt")
+    json.dump({"config": vars(args), "parameters": n_params, "history": history,
+               "best_val": best_val, "best_step": best_step}, f)
 
+# Generate the sample from the BEST model, not the last one
+model.load_state_dict(torch.load(ckpt_path, map_location=device)["model"])
 model.eval()
 start = torch.zeros((1, 1), dtype=torch.long, device=device)
 sample = decode(model.generate(start, 500)[0].tolist())
 with open(f"logs/{args.name}_sample.txt", "w", encoding="utf-8") as f:
     f.write(sample)
+print(f"best val {best_val:.4f} at step {best_step}")
 print("-" * 40)
 print(sample)
